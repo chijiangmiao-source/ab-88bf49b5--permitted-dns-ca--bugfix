@@ -117,21 +117,36 @@ export function dnsConstraintMatches(target, subtree) {
 }
 
 /**
- * Evaluate accumulated DNS constraints at one path level.
+ * Evaluate DNS name constraints accumulated along a path.
  *
- * @param {string} target
- * @param {{permittedDns: string[], excludedDns: string[]}} accumulated
+ * RFC 5280 4.2.1.10 semantics across multiple CAs:
+ *   - excludedSubtrees of every CA above a certificate form a *union*:
+ *     a name hit by any of them is rejected.
+ *   - permittedSubtrees do NOT union across CAs: every CA that states a
+ *     non-empty permittedSubtrees must be satisfied on its own. The overall
+ *     permitted space is the *intersection* of the per-CA spaces, so a broad
+ *     permit by a higher CA (e.g. example.com) can never offset a narrower
+ *     permit by a lower CA (e.g. ground.example).
+ *
+ * The caller walks the path top-down and pushes a CA's permitted set before
+ * evaluating each directly subordinate certificate, so only constraints from
+ * CAs above the evaluated name are present.
+ *
+ * @param {string} target normalized target host name
+ * @param {{permittedSets: string[][], excludedDns: string[]}} constraints
+ *   permittedSets[i] holds the permittedSubtrees dNSName list of one CA that
+ *   stated a non-empty list; excludedDns is the union over all such CAs
  * @returns {{ok: true} | {ok: false, reason: string}}
  */
-export function checkDnsConstraints(target, accumulated) {
-  for (const excluded of accumulated.excludedDns) {
+export function checkDnsConstraints(target, constraints) {
+  for (const excluded of constraints.excludedDns) {
     if (dnsConstraintMatches(target, excluded)) {
       return { ok: false, reason: `主机名 "${target}" 命中 excludedSubtrees 中的 "${excluded}"` };
     }
   }
-  if (accumulated.permittedDns.length > 0) {
+  for (const permittedSet of constraints.permittedSets) {
     let permitted = false;
-    for (const p of accumulated.permittedDns) {
+    for (const p of permittedSet) {
       if (dnsConstraintMatches(target, p)) {
         permitted = true;
         break;
@@ -140,9 +155,10 @@ export function checkDnsConstraints(target, accumulated) {
     if (!permitted) {
       return {
         ok: false,
-        reason: `主机名 "${target}" 不落在任何 permittedSubtrees（${accumulated.permittedDns
+        reason: `主机名 "${target}" 不满足路径上某个 CA 的 permittedSubtrees（${permittedSet
           .map((p) => `"${p}"`)
-          .join('、')}）内`,
+          .join('、')}）：每个设置了非空 permittedSubtrees 的 CA 都须分别满足（逐级取交集），上级 CA 更宽的许可不能抵消该限制`,
+        violatedPermittedSet: permittedSet,
       };
     }
   }

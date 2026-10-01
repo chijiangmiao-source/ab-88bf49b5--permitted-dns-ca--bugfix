@@ -629,23 +629,45 @@ function evaluatePath(full, target) {
 
   // --- Name constraints, accumulated top-down ---
   // Constraints stated by the CA at index i apply to every certificate with
-  // index < i. Walking leaf-ward, accumulate the union as we pass each CA.
-  const accumulated = { permittedDns: [], excludedDns: [] };
+  // index < i. Walking leaf-ward, apply each CA's constraints to its direct
+  // subordinate. Excluded subtrees of all CAs above form a union; permitted
+  // subtrees do NOT union across CAs — every CA that states a non-empty
+  // permittedSubtrees must be satisfied on its own (RFC 5280 4.2.1.10).
+  const constraints = { permittedSets: [], excludedDns: [] };
   for (let i = L; i >= 1; i--) {
     const ca = full[i];
     if (ca.nameConstraints) {
-      accumulated.permittedDns.push(...ca.nameConstraints.permittedDns);
-      accumulated.excludedDns.push(...ca.nameConstraints.excludedDns);
+      // An empty permittedSubtrees list means "no permit restriction" for
+      // this CA; only non-empty lists add a set that must be matched.
+      if (ca.nameConstraints.permittedDns.length > 0) {
+        constraints.permittedSets.push(ca.nameConstraints.permittedDns);
+      }
+      constraints.excludedDns.push(...ca.nameConstraints.excludedDns);
     }
     const subordinate = full[i - 1];
     const namesToCheck = i - 1 === 0 ? Array.from(new Set([...subordinate.sanDns.map((s) => s.toLowerCase()), target])) : subordinate.sanDns.map((s) => s.toLowerCase());
     for (const name of namesToCheck) {
-      const r = checkDnsConstraints(name, accumulated);
+      const r = checkDnsConstraints(name, constraints);
       if (!r.ok) {
+        // Locate the CA whose permittedSubtrees were violated (its own list
+        // is the last set added at the moment it stopped matching), so the
+        // report names the restricting CA rather than the whole path.
+        let restrictorLabel = null;
+        if (r.violatedPermittedSet) {
+          for (let k = i; k <= L; k++) {
+            const nc = full[k].nameConstraints;
+            if (nc && nc.permittedDns === r.violatedPermittedSet) {
+              restrictorLabel = full[k].subject.label;
+              break;
+            }
+          }
+        }
         failures.push({
           check: CHECK_NAMES.NAME_CONSTRAINTS,
           ok: false,
-          detail: `应用 ${i === L ? '信任锚' : `第 ${i} 级 CA`}（${ca.subject.label}）以上累积约束时：${r.reason}`,
+          detail: `应用 ${i === L ? '信任锚' : `第 ${i} 级 CA`}（${ca.subject.label}）以上累积约束时：${r.reason}${
+            restrictorLabel ? `（限制性 CA：${restrictorLabel}）` : ''
+          }`,
         });
       }
     }
@@ -773,7 +795,7 @@ function evidenceFor(chain, i, target, timeMs) {
     items.push({
       check: CHECK_NAMES.NAME_CONSTRAINTS,
       ok: true,
-      detail: `本 CA 施加 permitted=[${cert.nameConstraints.permittedDns.join(', ') || '—'}]，excluded=[${cert.nameConstraints.excludedDns.join(', ') || '—'}]；与上级约束累积后适用于所有下级证书的 dNSName`,
+      detail: `本 CA 施加 permitted=[${cert.nameConstraints.permittedDns.join(', ') || '—'}]，excluded=[${cert.nameConstraints.excludedDns.join(', ') || '—'}]；excluded 与各级 CA 取并集、permitted 逐级取交集（每个非空 permittedSubtrees 都须分别满足），应用到所有下级证书的 dNSName`,
     });
   }
   return items;

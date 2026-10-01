@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { once } from 'node:events';
-import { verifyChain } from '../src/app/crypto/verifier.js';
+import { verifyChain, CHECK_NAMES } from '../src/app/crypto/verifier.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -160,6 +160,76 @@ async function main() {
       denied.ok ? 'unexpected success' : denied.failure?.reason ?? '',
     );
     if (!(denied.ok === false)) smokeFailed = true;
+
+    // Multi-level permittedSubtrees intersection: an in-memory P-256 v3
+    // three-cert chain where the root permits example.com but the
+    // intermediate permits only ground.example; the leaf SAN and target name
+    // telemetry.example.com match the broad root permit yet violate the
+    // intermediate's. It must be rejected for a DNS name constraint — the
+    // higher CA's permit must never offset the lower CA's restriction.
+    const {
+      generateKeyPair, buildCertificate, extBasicConstraints, extKeyUsage,
+      extSubjectAltName, extNameConstraints,
+    } = await import('./cert-builder.js');
+    const { toPem } = await import('./der-encoder.js');
+    const D = (y, mo, d) => new Date(Date.UTC(y, mo - 1, d));
+    const kRootNc = await generateKeyPair();
+    const kMidNc2 = await generateKeyPair();
+    const kLeafCross = await generateKeyPair();
+    const ncRoot = await buildCertificate({
+      subject: 'Acceptance Cross-Constraint Root (permit example.com)',
+      keyPair: kRootNc,
+      notBefore: D(2024, 1, 1), notAfter: D(2036, 1, 1),
+      serial: 0x1001,
+      extensions: [
+        extBasicConstraints({ cA: true, pathLen: 2 }),
+        extKeyUsage(['keyCertSign', 'cRLSign']),
+        extNameConstraints({ permitted: ['example.com'] }),
+      ],
+    });
+    const ncMid = await buildCertificate({
+      subject: 'Acceptance Cross-Constraint Intermediate (permit ground.example)',
+      keyPair: kMidNc2,
+      issuer: { nameAttrs: ncRoot.subjectAttrs, keyPair: kRootNc },
+      notBefore: D(2025, 1, 1), notAfter: D(2031, 1, 1),
+      serial: 0x2001,
+      extensions: [
+        extBasicConstraints({ cA: true, pathLen: 0 }),
+        extKeyUsage(['keyCertSign', 'cRLSign']),
+        extNameConstraints({ permitted: ['ground.example'] }),
+      ],
+    });
+    const ncLeaf = await buildCertificate({
+      subject: 'telemetry.example.com cross-constraint leaf',
+      keyPair: kLeafCross,
+      issuer: { nameAttrs: ncMid.subjectAttrs, keyPair: kMidNc2 },
+      notBefore: D(2026, 1, 1), notAfter: D(2027, 1, 1),
+      serial: 0x3001,
+      extensions: [
+        extBasicConstraints({ cA: false }),
+        extKeyUsage(['digitalSignature']),
+        extSubjectAltName(['telemetry.example.com']),
+      ],
+    });
+    const crossed = await verifyChain({
+      anchorText: toPem(ncRoot.der),
+      poolText: [toPem(ncMid.der), toPem(ncLeaf.der)].join('\n'),
+      dnsName: 'telemetry.example.com',
+      verifyTimeMs: Date.UTC(2026, 0, 1),
+    });
+    const crossOk =
+      crossed.ok === false &&
+      crossed.failure?.check === CHECK_NAMES.NAME_CONSTRAINTS &&
+      /permittedSubtrees/.test(crossed.failure?.reason ?? '') &&
+      /ground\.example/.test(crossed.failure?.reason ?? '');
+    record(
+      'multi-level permittedSubtrees intersection enforced (root example.com vs intermediate ground.example)',
+      crossOk,
+      crossed.ok
+        ? 'BUG: union of permitted constraints accepted'
+        : crossed.failure?.reason ?? 'not rejected as a DNS name constraint failure',
+    );
+    if (!crossOk) smokeFailed = true;
   } catch (e) {
     record('server lifecycle', false, e.message);
     console.log(serverLog);

@@ -27,8 +27,10 @@
 5. **BasicConstraints cA**——叶证书不得 cA=true；签发者必须存在扩展且 cA=true
 6. **keyUsage**——CA 须含 keyCertSign；叶证书若带 keyUsage 须含 digitalSignature
 7. **pathLenConstraint**——统计每个 CA 路径下方的**非自签发**中间证书数量
-8. **名称约束**——自锚向下累积每个 CA 的 DNS permitted/excluded，应用到所有下级证书的
-   dNSName（叶级额外对目标主机名求值）；excluded 命中即拒，permitted 非空时须至少命中一条
+8. **名称约束**——自锚向下收集每个 CA 的 DNS permitted/excluded，应用到所有下级证书的
+   dNSName（叶级额外对目标主机名求值）；excluded 命中即拒；permitted 取**逐级交集**：
+   每个设置了非空 permittedSubtrees 的 CA 都须分别被满足，上级 CA 更宽的许可（如
+   `example.com`）不能抵消下级 CA 更窄的限制（如 `ground.example`）
 9. **SAN 主机名**——精确匹配 + 仅允许最左整标签通配 `*.domain`；回退 CN 不予接受
 10. **循环签发**——路径内重复出现同一证书判为循环
 
