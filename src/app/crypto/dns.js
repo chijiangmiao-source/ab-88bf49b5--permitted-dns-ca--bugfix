@@ -117,33 +117,56 @@ export function dnsConstraintMatches(target, subtree) {
 }
 
 /**
- * Evaluate accumulated DNS constraints at one path level.
+ * Evaluate DNS name constraints accumulated along a certification path.
+ *
+ * RFC 5280 4.2.1.10 requires permittedSubtrees stated by DIFFERENT CAs to be
+ * intersected: a name must lie within at least one permitted subtree of EVERY
+ * CA that states a non-empty permittedSubtrees. Merely unioning the lists
+ * would let a loose upper-CA permission (e.g. "example.com") cancel a tighter
+ * lower-CA restriction (e.g. "ground.example").
  *
  * @param {string} target
- * @param {{permittedDns: string[], excludedDns: string[]}} accumulated
- * @returns {{ok: true} | {ok: false, reason: string}}
+ * @param {object} constraints
+ * @param {string[][]} [constraints.permittedGroups]
+ *   One entry per CA that states a non-empty permittedSubtrees, each holding
+ *   that CA's permitted subtree strings. The target must match at least one
+ *   subtree inside every group.
+ * @param {string[]}   [constraints.permittedDns]
+ *   Single-CA shorthand, equivalent to one permitted group.
+ * @param {string[]}   [constraints.excludedDns]
+ *   Excluded subtrees accumulated from every CA above the evaluation point;
+ *   matching any one of them rejects the name.
+ * @returns {{ok: true} | {ok: false, reason: string, groupIndex?: number}}
  */
-export function checkDnsConstraints(target, accumulated) {
-  for (const excluded of accumulated.excludedDns) {
+export function checkDnsConstraints(target, constraints) {
+  const excludedDns = constraints.excludedDns || [];
+  for (const excluded of excludedDns) {
     if (dnsConstraintMatches(target, excluded)) {
       return { ok: false, reason: `主机名 "${target}" 命中 excludedSubtrees 中的 "${excluded}"` };
     }
   }
-  if (accumulated.permittedDns.length > 0) {
-    let permitted = false;
-    for (const p of accumulated.permittedDns) {
-      if (dnsConstraintMatches(target, p)) {
-        permitted = true;
-        break;
+  let groups = constraints.permittedGroups;
+  if (!groups && constraints.permittedDns) groups = [constraints.permittedDns];
+  if (groups) {
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      const group = groups[groupIndex];
+      if (group.length === 0) continue;
+      let permitted = false;
+      for (const p of group) {
+        if (dnsConstraintMatches(target, p)) {
+          permitted = true;
+          break;
+        }
       }
-    }
-    if (!permitted) {
-      return {
-        ok: false,
-        reason: `主机名 "${target}" 不落在任何 permittedSubtrees（${accumulated.permittedDns
-          .map((p) => `"${p}"`)
-          .join('、')}）内`,
-      };
+      if (!permitted) {
+        return {
+          ok: false,
+          groupIndex,
+          reason: `主机名 "${target}" 不落在该级 CA 的 permittedSubtrees（${group
+            .map((p) => `"${p}"`)
+            .join('、')}）内`,
+        };
+      }
     }
   }
   return { ok: true };

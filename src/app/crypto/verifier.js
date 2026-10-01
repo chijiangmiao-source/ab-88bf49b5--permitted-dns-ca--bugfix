@@ -629,23 +629,44 @@ function evaluatePath(full, target) {
 
   // --- Name constraints, accumulated top-down ---
   // Constraints stated by the CA at index i apply to every certificate with
-  // index < i. Walking leaf-ward, accumulate the union as we pass each CA.
-  const accumulated = { permittedDns: [], excludedDns: [] };
+  // index < i. Walking leaf-ward, each CA's NON-EMPTY permittedSubtrees is
+  // kept as its OWN group: RFC 5280 intersects permitted subtrees across CAs,
+  // so a name must lie within at least one permitted subtree of EVERY
+  // constraining CA — a broad permission higher up (e.g. "example.com" on
+  // the anchor) must not cancel a narrower restriction below it (e.g.
+  // "ground.example" on an intermediate). Excluded subtrees do union: a hit
+  // against any ancestor CA's excludedSubtrees rejects the name.
+  const excludedDns = [];
+  /** @type {{ca: object, caIndex: number, permittedDns: string[]}[]} */
+  const permittedGroups = [];
   for (let i = L; i >= 1; i--) {
     const ca = full[i];
     if (ca.nameConstraints) {
-      accumulated.permittedDns.push(...ca.nameConstraints.permittedDns);
-      accumulated.excludedDns.push(...ca.nameConstraints.excludedDns);
+      if (ca.nameConstraints.permittedDns.length > 0) {
+        permittedGroups.push({ ca, caIndex: i, permittedDns: ca.nameConstraints.permittedDns });
+      }
+      excludedDns.push(...ca.nameConstraints.excludedDns);
     }
     const subordinate = full[i - 1];
     const namesToCheck = i - 1 === 0 ? Array.from(new Set([...subordinate.sanDns.map((s) => s.toLowerCase()), target])) : subordinate.sanDns.map((s) => s.toLowerCase());
     for (const name of namesToCheck) {
-      const r = checkDnsConstraints(name, accumulated);
+      const r = checkDnsConstraints(name, {
+        permittedGroups: permittedGroups.map((g) => g.permittedDns),
+        excludedDns,
+      });
       if (!r.ok) {
+        let detail;
+        if (r.groupIndex !== undefined && permittedGroups[r.groupIndex]) {
+          const owner = permittedGroups[r.groupIndex];
+          const ownerLabel = `${owner.caIndex === L ? '信任锚' : `第 ${owner.caIndex} 级 CA`}（${owner.ca.subject.label}）`;
+          detail = `应用 ${i === L ? '信任锚' : `第 ${i} 级 CA`}（${ca.subject.label}）以上累积约束时，${ownerLabel} 的 permittedSubtrees 未被满足：${r.reason}`;
+        } else {
+          detail = `应用 ${i === L ? '信任锚' : `第 ${i} 级 CA`}（${ca.subject.label}）以上累积约束时：${r.reason}`;
+        }
         failures.push({
           check: CHECK_NAMES.NAME_CONSTRAINTS,
           ok: false,
-          detail: `应用 ${i === L ? '信任锚' : `第 ${i} 级 CA`}（${ca.subject.label}）以上累积约束时：${r.reason}`,
+          detail,
         });
       }
     }

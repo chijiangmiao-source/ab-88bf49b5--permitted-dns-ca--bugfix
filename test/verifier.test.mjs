@@ -84,6 +84,32 @@ test('name constraints: outside permitted subtree rejected', async () => {
   assert.match(r.failure.reason, /permittedSubtrees/);
 });
 
+test('multi-level name constraints: leaf matching the anchor permit but violating the intermediate permit is rejected', async () => {
+  // root-nc-com permits example.com; mid-nc-ground permits ground.example.
+  // The leaf SAN and the checked name are telemetry.example.com: it satisfies
+  // the anchor's broad permission but NOT the intermediate's tighter one.
+  const r = await verifyChain(
+    input(F['root-nc-com'].pem, [F['mid-nc-ground'].pem, F['leaf-cross-violation'].pem], 'telemetry.example.com'),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.failure.check, CHECK_NAMES.NAME_CONSTRAINTS);
+  // The failure is attributable to the intermediate CA's restriction, not a
+  // generic parse/SAN failure.
+  assert.match(r.failure.reason, /permittedSubtrees/);
+  assert.match(r.failure.reason, /ground\.example/);
+});
+
+test('multi-level name constraints: name inside every CA permitted subtree still verifies', async () => {
+  // telemetry.ground.example.com lies within BOTH the anchor's example.com
+  // and the intermediate's nested ground.example.com permits -> the fix must
+  // not regress compliant multi-level chains.
+  const r = await verifyChain(
+    input(F['root-nc-com'].pem, [F['mid-nc-ground-com'].pem, F['leaf-cross-ok'].pem], 'telemetry.ground.example.com'),
+  );
+  assert.equal(r.ok, true, JSON.stringify(r.failure));
+  assert.equal(r.chain.length, 3);
+});
+
 test('pathLenConstraint: intermediate beneath pathLen=0 anchor fails', async () => {
   const r = await verifyChain(
     input(F['root-pl0'].pem, [F['mid-x'].pem, F['leaf-pl'].pem], 'pl.telemetry.ground.example'),

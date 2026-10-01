@@ -49,3 +49,42 @@ test('accumulated constraints: excluded wins; any permitted must match', () => {
   assert.equal(checkDnsConstraints('x.y', { permittedDns: [], excludedDns: ['z.y'] }).ok, true);
   assert.equal(checkDnsConstraints('z.y', { permittedDns: [], excludedDns: ['z.y'] }).ok, false);
 });
+
+test('permittedSubtrees from separate CAs intersect: a broad upper-CA grant cannot cancel a tighter lower-CA restriction', () => {
+  // Anchor permits example.com; the intermediate below it permits only
+  // ground.example (a disjoint namespace). Each CA must be satisfied
+  // independently.
+  const disjoint = [['example.com'], ['ground.example']];
+
+  // Matches the anchor but NOT the intermediate -> rejected at group 1.
+  const bad = checkDnsConstraints('telemetry.example.com', { permittedGroups: disjoint, excludedDns: [] });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.groupIndex, 1);
+  assert.match(bad.reason, /permittedSubtrees/);
+
+  // Nested permits with a non-empty intersection: anchor example.com plus
+  // intermediate ground.example.com.
+  const nested = [['example.com'], ['ground.example.com']];
+
+  // Lies within both -> accepted.
+  assert.equal(
+    checkDnsConstraints('telemetry.ground.example.com', { permittedGroups: nested, excludedDns: [] }).ok,
+    true,
+  );
+
+  // Matches the intermediate but not the anchor -> rejected at group 0.
+  const outsideAnchor = checkDnsConstraints('telemetry.ground.example.org', {
+    permittedGroups: nested,
+    excludedDns: [],
+  });
+  assert.equal(outsideAnchor.ok, false);
+  assert.equal(outsideAnchor.groupIndex, 0);
+
+  // Excluded still wins even when every permitted group matches.
+  const excluded = checkDnsConstraints('a.ground.example.com', {
+    permittedGroups: nested,
+    excludedDns: ['a.ground.example.com'],
+  });
+  assert.equal(excluded.ok, false);
+  assert.match(excluded.reason, /excludedSubtrees/);
+});

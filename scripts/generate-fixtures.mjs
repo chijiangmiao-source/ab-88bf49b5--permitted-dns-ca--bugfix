@@ -72,6 +72,11 @@ async function main() {
   const kCycleY = await mkp();
   const kLeafCycle = await mkp();
   const kLeafCa = await mkp();
+  const kRootNcCom = await mkp();
+  const kMidNcGround = await mkp();
+  const kMidNcGroundCom = await mkp();
+  const kLeafCrossViolation = await mkp();
+  const kLeafCrossOk = await mkp();
 
   const CA_KU = () => extKeyUsage(['keyCertSign', 'cRLSign']);
   const LEAF_KU = () => extKeyUsage(['digitalSignature']);
@@ -356,6 +361,75 @@ async function main() {
   });
   await saveCert('leaf-cycle', leafCycle);
 
+  // ----- Multi-level permittedSubtrees (intersection, not union) -----
+  // rootNcCom (permitted example.com)
+  //   -> midNcGround (permitted ground.example, disjoint from example.com)
+  //        -> leafCrossViolation (SAN/target telemetry.example.com):
+  //           matches the anchor's broad "example.com" permission but NOT the
+  //           intermediate's "ground.example" restriction -> must be REJECTED
+  //   -> midNcGroundCom (permitted ground.example.com, NESTED inside the
+  //      anchor's example.com)
+  //        -> leafCrossOk (SAN/target telemetry.ground.example.com):
+  //           lies within BOTH permitted subtrees -> must VERIFY (guards
+  //           against the fix turning the intersection into an empty set)
+  const rootNcCom = await buildCertificate({
+    subject: 'Root CA Permitted Example Dot Com',
+    keyPair: kRootNcCom,
+    notBefore: D(2024, 1, 1), notAfter: D(2036, 1, 1),
+    serial: 0xd001,
+    extensions: [
+      BC_CA(2), CA_KU(),
+      extNameConstraints({ permitted: ['example.com'] }),
+    ],
+  });
+  await saveCert('root-nc-com', rootNcCom);
+
+  const midNcGround = await buildCertificate({
+    subject: 'Intermediate CA Permitted Ground Example',
+    keyPair: kMidNcGround,
+    issuer: { nameAttrs: rootNcCom.subjectAttrs, keyPair: kRootNcCom },
+    notBefore: D(2025, 1, 1), notAfter: D(2031, 1, 1),
+    serial: 0xd002,
+    extensions: [
+      BC_CA(1), CA_KU(),
+      extNameConstraints({ permitted: ['ground.example'] }),
+    ],
+  });
+  await saveCert('mid-nc-ground', midNcGround);
+
+  const midNcGroundCom = await buildCertificate({
+    subject: 'Intermediate CA Permitted Ground Example Dot Com',
+    keyPair: kMidNcGroundCom,
+    issuer: { nameAttrs: rootNcCom.subjectAttrs, keyPair: kRootNcCom },
+    notBefore: D(2025, 1, 1), notAfter: D(2031, 1, 1),
+    serial: 0xd005,
+    extensions: [
+      BC_CA(1), CA_KU(),
+      extNameConstraints({ permitted: ['ground.example.com'] }),
+    ],
+  });
+  await saveCert('mid-nc-ground-com', midNcGroundCom);
+
+  const leafCrossViolation = await buildCertificate({
+    subject: 'telemetry.example.com cross-constraint violating leaf',
+    keyPair: kLeafCrossViolation,
+    issuer: { nameAttrs: midNcGround.subjectAttrs, keyPair: kMidNcGround },
+    notBefore: D(2025, 6, 1), notAfter: D(2027, 1, 1),
+    serial: 0xd003,
+    extensions: [BC_LEAF(), LEAF_KU(), extSubjectAltName(['telemetry.example.com'])],
+  });
+  await saveCert('leaf-cross-violation', leafCrossViolation);
+
+  const leafCrossOk = await buildCertificate({
+    subject: 'telemetry.ground.example.com cross-constraint compliant leaf',
+    keyPair: kLeafCrossOk,
+    issuer: { nameAttrs: midNcGroundCom.subjectAttrs, keyPair: kMidNcGroundCom },
+    notBefore: D(2025, 6, 1), notAfter: D(2027, 1, 1),
+    serial: 0xd004,
+    extensions: [BC_LEAF(), LEAF_KU(), extSubjectAltName(['telemetry.ground.example.com'])],
+  });
+  await saveCert('leaf-cross-ok', leafCrossOk);
+
   // ----- Tampered signature: flip last byte (inside s) of the valid leaf -----
   const tampered = new Uint8Array(leaf.der);
   tampered[tampered.length - 1] ^= 0xff;
@@ -381,6 +455,9 @@ async function main() {
     'ca-no-kcs': caKu, 'leaf-under-no-kcs': leafUnderCaKu,
     'leaf-ca': leafCa, 'leaf-unknown-ext': leafUnknownExt, 'leaf-v1': leafV1,
     'cycle-x': cycX, 'cycle-y': cycY, 'leaf-cycle': leafCycle,
+    'root-nc-com': rootNcCom, 'mid-nc-ground': midNcGround,
+    'mid-nc-ground-com': midNcGroundCom,
+    'leaf-cross-violation': leafCrossViolation, 'leaf-cross-ok': leafCrossOk,
   })) saved[n] = { pem: toPem(b.der), der: b.der };
 
   // ----- Page sample (valid chain) -----
