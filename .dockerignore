@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test/fixtures/*.pem
+test/fixtures/manifest.mjs
+src/app/samples/
+.git/
+*.log
+.DS_Store

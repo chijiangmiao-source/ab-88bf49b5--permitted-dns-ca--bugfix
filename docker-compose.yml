@@ -1,0 +1,30 @@
+# Compose: page service (long-running) and verify (one-shot acceptance).
+#
+#   docker compose up web --build         # serve the page
+#   docker compose run --rm verify        # one-shot acceptance, exit code
+#
+# Host port for the page is configurable via the HOST_PORT env var:
+#   HOST_PORT=9090 docker compose up web
+services:
+  web:
+    build:
+      context: .
+      target: web
+    image: cert-chain-review:web
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  verify:
+    build:
+      context: .
+      target: verify
+    image: cert-chain-review:verify
+    environment:
+      VERIFY_PORT: "8091"
+    restart: "no"

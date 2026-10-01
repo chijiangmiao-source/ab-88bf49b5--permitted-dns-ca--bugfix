@@ -1,0 +1,17 @@
+{
+  "name": "offline-cert-chain-review",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "浏览器内离线 X.509 v3 P-256 ECDSA/SHA-256 证书链复核工具",
+  "scripts": {
+    "gen:fixtures": "node scripts/generate-fixtures.mjs",
+    "test": "node --test test/",
+    "build": "node scripts/build-page.mjs",
+    "serve": "node scripts/server.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

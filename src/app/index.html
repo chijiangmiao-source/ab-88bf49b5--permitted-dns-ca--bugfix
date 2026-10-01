@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>遥测服务证书链离线复核</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>遥测服务证书链离线复核</h1>
+    <p class="subtitle">
+      以指定主机名与验证时刻，在浏览器内对离线交付的 P-256 ECDSA/SHA-256 证书包做受限信任链核验。
+      所有解析与验签均在本页 Web Worker 内完成，不上传任何内容。
+    </p>
+  </header>
+
+  <main>
+    <form id="verify-form" class="panel" autocomplete="off" novalidate>
+      <div class="field">
+        <label for="anchor">信任锚（单张 DER Base64 / PEM）</label>
+        <textarea id="anchor" rows="5" spellcheck="false"
+          placeholder="粘贴信任锚证书的 Base64(DER) 或 -----BEGIN CERTIFICATE----- ..."></textarea>
+      </div>
+
+      <div class="field">
+        <label for="pool">无序证书（至多 7 张，叶证书与中间 CA 混贴即可；DER Base64 / PEM）</label>
+        <textarea id="pool" rows="10" spellcheck="false"
+          placeholder="可连续粘贴多个 PEM 块，或以空行分隔的多段 DER Base64"></textarea>
+        <div class="hint">已识别证书数：<span id="pool-count">0</span> / 7</div>
+      </div>
+
+      <div class="row">
+        <div class="field grow">
+          <label for="dns">目标 DNS 名称</label>
+          <input id="dns" type="text" spellcheck="false" placeholder="例如 telemetry.ground.example" />
+        </div>
+        <div class="field grow">
+          <label for="time">验证时刻（UTC）</label>
+          <input id="time" type="datetime-local" step="1" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" id="submit-btn">提交复核</button>
+        <button type="button" id="clear-btn" class="secondary">清空草稿</button>
+        <button type="button" id="sample-btn" class="ghost">填入内置示例</button>
+        <span id="worker-status" class="worker-status"></span>
+      </div>
+    </form>
+
+    <section id="result" class="panel result-panel" aria-live="polite" hidden>
+      <!-- rendered by main.js -->
+    </section>
+  </main>
+
+  <footer>
+    <span>仅接受 X.509 v3 · ecdsa-with-SHA256 · prime256v1(P-256)</span>
+  </footer>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
